@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;" />
+  <title>Manga Pose Studio</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div id="app">
+
+  <!-- ===================== BIBLIOTECA (izquierda) ===================== -->
+  <aside id="library" class="panel">
+    <header class="panel-head">
+      <h1>Poses</h1>
+      <span class="badge" id="poseCount">0</span>
+    </header>
+
+    <div class="pad">
+      <input id="poseSearch" type="search" placeholder="Buscar: gato, mesa, salto…" autocomplete="off" />
+      <div id="catChips" class="chips"></div>
+    </div>
+
+    <div id="poseList" class="list scroll"></div>
+
+    <section class="section">
+      <h2 class="section-title">Mis poses</h2>
+      <div id="userPoseList" class="list scroll small"></div>
+      <div class="row gap">
+        <button id="btnImport" class="ghost tiny">Importar…</button>
+        <button id="btnExportAll" class="ghost tiny">Exportar…</button>
+        <button id="btnFolder" class="ghost tiny" title="Abrir la carpeta donde se guardan">Carpeta</button>
+      </div>
+    </section>
+  </aside>
+
+  <!-- ========================= VISTA 3D (centro) ======================= -->
+  <main id="stage">
+    <div id="toolbar">
+      <div class="tool-group" id="camPresets"></div>
+      <div class="spacer"></div>
+      <label class="tool-field">
+        <span>Lente</span>
+        <input id="fov" type="range" min="12" max="90" step="1" value="40" />
+        <output id="fovOut">40°</output>
+      </label>
+      <label class="tool-field">
+        <span>Estilo</span>
+        <select id="shading"></select>
+      </label>
+      <label class="tool-field">
+        <span>Fondo</span>
+        <select id="background">
+          <option value="oscuro">Oscuro</option>
+          <option value="blanco">Blanco</option>
+          <option value="transparente">Transparente</option>
+        </select>
+      </label>
+    </div>
+
+    <div id="viewport">
+      <canvas id="canvas"></canvas>
+      <div id="hud">
+        <span id="hudPose">—</span>
+        <span id="hudBone"></span>
+        <span id="hudHeight"></span>
+      </div>
+      <div id="hint">
+        Arrastra los <b>puntos naranjas</b> (manos/pies) para mover la extremidad ·
+        los <b>azules</b> giran esa articulación ·
+        clic izq. en vacío = orbitar · clic der. = desplazar · rueda = zoom
+      </div>
+      <div id="toast"></div>
+    </div>
+  </main>
+
+  <!-- ======================= CONTROLES (derecha) ====================== -->
+  <aside id="controls" class="panel scroll">
+
+    <section class="section">
+      <h2 class="section-title">Articulación</h2>
+      <div class="pad">
+        <select id="boneSelect"></select>
+        <div id="boneSliders"></div>
+        <div class="row gap">
+          <button id="btnBoneReset" class="ghost tiny">Reiniciar hueso</button>
+          <label class="check tiny"><input type="checkbox" id="symmetry" /> Simetría</label>
+          <label class="check tiny"><input type="checkbox" id="limits" checked /> Límites</label>
+        </div>
+        <label class="field">
+          <span>Giro de codo / rodilla <small>(al arrastrar mano o pie)</small></span>
+          <input id="twist" type="range" min="-180" max="180" step="1" value="0" />
+          <output id="twistOut">0°</output>
+        </label>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2 class="section-title">Cuerpo</h2>
+      <div class="pad">
+        <select id="bodyType"></select>
+        <div id="propSliders"></div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2 class="section-title">Escena</h2>
+      <div class="pad">
+        <div class="row gap">
+          <select id="propPicker"></select>
+          <button id="btnAddProp" class="tiny">Añadir</button>
+        </div>
+        <div id="propList" class="mini-list"></div>
+        <label class="field">
+          <span>Luz principal</span>
+          <input id="lightAngle" type="range" min="-180" max="180" step="1" value="40" />
+          <output id="lightOut">40°</output>
+        </label>
+        <div class="row gap wrap">
+          <label class="check tiny"><input type="checkbox" id="showGrid" checked /> Rejilla</label>
+          <label class="check tiny"><input type="checkbox" id="showShadow" checked /> Sombra</label>
+          <label class="check tiny"><input type="checkbox" id="showHandles" checked /> Controles</label>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2 class="section-title">Pose</h2>
+      <div class="pad grid2">
+        <button id="btnMirror" class="ghost">Espejo</button>
+        <button id="btnNaturalize" class="ghost" title="Rompe la simetría con micro-variaciones">Naturalizar</button>
+        <button id="btnGround" class="ghost">Apoyar en suelo</button>
+        <button id="btnReset" class="ghost">Pose neutra</button>
+        <button id="btnUndo" class="ghost">Deshacer</button>
+        <button id="btnRedo" class="ghost">Rehacer</button>
+      </div>
+      <div class="pad">
+        <label class="field">
+          <span>Intensidad de "naturalizar"</span>
+          <input id="natAmount" type="range" min="0" max="100" step="1" value="45" />
+          <output id="natOut">45%</output>
+        </label>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2 class="section-title">Guardar / exportar</h2>
+      <div class="pad">
+        <div class="row gap">
+          <input id="poseName" type="text" placeholder="Nombre de la pose" />
+          <button id="btnSavePose">Guardar</button>
+        </div>
+        <div class="row gap">
+          <button id="btnPng" class="ghost">Exportar PNG</button>
+          <button id="btnCopy" class="ghost">Copiar imagen</button>
+        </div>
+        <label class="check tiny"><input type="checkbox" id="pngTransparent" /> PNG con fondo transparente</label>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2 class="section-title">Atajos</h2>
+      <div class="pad keys">
+        <div><kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Y</kbd> deshacer / rehacer</div>
+        <div><kbd>H</kbd> controles · <kbd>G</kbd> rejilla · <kbd>N</kbd> naturalizar</div>
+        <div><kbd>M</kbd> espejo · <kbd>F</kbd> apoyar en suelo · <kbd>E</kbd> exportar PNG</div>
+      </div>
+    </section>
+  </aside>
+</div>
+
+<script type="module" src="./js/app.js"></script>
+</body>
+</html>

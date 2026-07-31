@@ -1,0 +1,73 @@
+{
+  "name": "manga-pose-studio",
+  "productName": "Manga Pose Studio",
+  "version": "1.0.0",
+  "description": "Generador de poses 3D para referencia de dibujo manga",
+  "type": "module",
+  "main": "main.cjs",
+  "author": "Ryuichi",
+  "license": "MIT",
+  "scripts": {
+    "postinstall": "node scripts/copy-vendor.mjs",
+    "vendor": "node scripts/copy-vendor.mjs",
+    "fix:electron": "node scripts/fix-electron.mjs",
+    "fix:electron:manual": "node scripts/install-electron-manual.mjs",
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "test": "node --test \"test/**/*.test.mjs\"",
+    "test:watch": "node --test --watch \"test/**/*.test.mjs\"",
+    "dist": "npm run vendor && electron-builder --win --x64",
+    "dist:portable": "npm run vendor && electron-builder --win portable --x64",
+    "pack": "npm run vendor && electron-builder --dir"
+  },
+  "dependencies": {
+    "electron": "^32.3.3",
+    "three": "^0.169.0"
+  },
+  "devDependencies": {
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.ryuichi.mangaposestudio",
+    "productName": "Manga Pose Studio",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "src/**/*",
+      "!src/**/*.map",
+      "!node_modules/**/*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Manga Pose Studio"
+    }
+  },
+  "allowScripts": {
+    "electron@32.3.3": true
+  }
+}

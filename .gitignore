@@ -1,0 +1,10 @@
+node_modules/
+dist/
+
+# three.js se copia aquí desde node_modules con `npm run vendor`
+# (el postinstall lo hace solo tras `npm install`)
+src/vendor/
+
+*.log
+.DS_Store
+Thumbs.db

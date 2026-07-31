@@ -1,0 +1,55 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "1 - Instalar dependencias",
+      "type": "shell",
+      "command": "npm install",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "detail": "Descarga Electron y three.js. Solo hace falta la primera vez."
+    },
+    {
+      "label": "2 - Ejecutar la app",
+      "type": "shell",
+      "command": "npm start",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "detail": "Abre Manga Pose Studio."
+    },
+    {
+      "label": "2b - Ejecutar con DevTools",
+      "type": "shell",
+      "command": "npm run dev",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "detail": "Igual que 'Ejecutar' pero abre la consola del navegador."
+    },
+    {
+      "label": "3 - Pasar los tests",
+      "type": "shell",
+      "command": "npm test",
+      "group": { "kind": "test", "isDefault": true },
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "detail": "Ejecuta las pruebas de esqueleto, IK, poses y codigo."
+    },
+    {
+      "label": "3b - Tests en modo vigilancia",
+      "type": "shell",
+      "command": "npm run test:watch",
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "detail": "Relanza los tests cada vez que guardas un archivo."
+    },
+    {
+      "label": "4 - Generar el instalable .exe",
+      "type": "shell",
+      "command": "npm run dist",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "detail": "Crea dist/Manga Pose Studio-1.0.0-x64.exe (instalador + portable)."
+    }
+  ]
+}

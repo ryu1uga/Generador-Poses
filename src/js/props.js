@@ -183,7 +183,7 @@ const BUILDERS = {
  * Van en un grupo aparte para poder ocultarlos al exportar el PNG y para que
  * el raycast los distinga de la geometría del objeto.
  */
-function buildPropGizmo(radius) {
+export function buildGizmo(radius, { moveColor = 0x7bdc8b, ringColor = 0x4fc3f7 } = {}) {
   const g = new THREE.Group();
   g.name = 'propGizmo';
   g.userData.isPropGizmo = true;
@@ -193,7 +193,7 @@ function buildPropGizmo(radius) {
   });
 
   // Disco de desplazamiento
-  const move = new THREE.Mesh(new THREE.CircleGeometry(radius * 0.46, 28), mkMat(0x7bdc8b));
+  const move = new THREE.Mesh(new THREE.CircleGeometry(radius * 0.46, 28), mkMat(moveColor));
   move.rotation.x = -Math.PI / 2;
   move.position.y = 0.006;
   move.renderOrder = 998;
@@ -201,7 +201,7 @@ function buildPropGizmo(radius) {
   g.add(move);
 
   // Anillo de giro
-  const ring = new THREE.Mesh(new THREE.RingGeometry(radius * 0.74, radius * 0.96, 40), mkMat(0x4fc3f7));
+  const ring = new THREE.Mesh(new THREE.RingGeometry(radius * 0.74, radius * 0.96, 40), mkMat(ringColor));
   ring.rotation.x = -Math.PI / 2;
   ring.position.y = 0.005;
   ring.renderOrder = 998;
@@ -209,7 +209,7 @@ function buildPropGizmo(radius) {
   g.add(ring);
 
   // Muesca que indica hacia dónde mira el objeto
-  const notch = new THREE.Mesh(new THREE.CircleGeometry(radius * 0.09, 12), mkMat(0x4fc3f7));
+  const notch = new THREE.Mesh(new THREE.CircleGeometry(radius * 0.09, 12), mkMat(ringColor));
   notch.rotation.x = -Math.PI / 2;
   notch.position.set(0, 0.007, radius * 0.85);
   notch.renderOrder = 999;
@@ -233,7 +233,7 @@ export function createProp(id) {
   const size = bb.getSize(new THREE.Vector3());
   const radius = Math.max(0.34, Math.min(1.3, Math.max(size.x, size.z) * 0.62));
 
-  const gizmo = buildPropGizmo(radius);
+  const gizmo = buildGizmo(radius);
   // Centrado en la huella del objeto, no en su origen, para que caiga debajo.
   gizmo.position.set((bb.min.x + bb.max.x) / 2, 0, (bb.min.z + bb.max.z) / 2);
   g.add(gizmo);

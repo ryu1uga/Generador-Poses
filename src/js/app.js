@@ -1,7 +1,9 @@
 import * as THREE from '../vendor/three.module.js';
 import { createScene } from './scene.js';
 import { OrbitCamera, CAMERA_PRESETS } from './orbit.js';
-import { createProp, setPropGizmosVisible, highlightPropGizmo } from './props.js';
+import {
+  createProp, setPropGizmosVisible, highlightPropGizmo, buildGizmo,
+} from './props.js';
 import {
   POSES, POSES_BY_ID, CATEGORIES, PROP_IDS, PROP_LABELS,
   searchPoses, clonePose, mirrorBones, naturalize,
@@ -33,6 +35,8 @@ const state = {
   shading: 'madera',
   props: [],
   selectedProp: null,
+  figures: [],
+  activeFigure: null,
   userPoses: [],
   category: 'todas',
   query: '',
@@ -49,8 +53,133 @@ const viewport = $('#viewport');
 const view = createScene(canvas);
 const orbit = new OrbitCamera(view.camera, viewport);
 
-let man = buildMannequin(state.proportions, state.shading);
-view.scene.add(man.root);
+/* =========================================================== figuras
+ *
+ * La escena puede contener varios maniquíes. Cada uno vive dentro de su propio
+ * grupo, que es lo que se desplaza y gira por el suelo; así `pose.root.pos`
+ * sigue siendo local a la figura y `snapToGround` continúa funcionando tal cual
+ * (el grupo solo aplica traslación en X/Z y giro en Y, que no alteran la altura).
+ *
+ * `man` es un alias vivo del maniquí de la figura activa: casi todo el resto
+ * del archivo sigue trabajando contra él sin enterarse de que hay varios.
+ */
+
+let figUid = 1;
+let man = null;
+
+function createFigure({
+  name, proportions, shading, offset = [0, 0], rotY = 0, pose = null,
+} = {}) {
+  // BODY_TYPES trae una clave `label` que no es una proporción: si se cuela,
+  // acaba en el archivo guardado y en los deslizadores.
+  const { label: _drop, ...props } = { ...(proportions || state.proportions) };
+  const shade = shading || state.shading;
+  const mannequin = buildMannequin(props, shade);
+
+  const group = new THREE.Group();
+  group.name = `figure:${figUid}`;
+  group.position.set(offset[0], 0, offset[1]);
+  group.rotation.y = rotY * D2R;
+  group.add(mannequin.root);
+
+  // Manipulador de colocación, igual que el de los objetos pero en verde azulado.
+  const gizmo = buildGizmo(0.52, { moveColor: 0x7bdc8b, ringColor: 0xffb74d });
+  gizmo.visible = handlesOn();
+  group.add(gizmo);
+
+  view.scene.add(group);
+
+  const fig = {
+    uid: figUid++,
+    name: name || `Figura ${state.figures.length + 1}`,
+    man: mannequin,
+    group,
+    gizmo,
+    bodyType: state.bodyType,
+    proportions: props,
+    shading: shade,
+    selectedBone: 'chest',
+  };
+  fig.group.userData.figureUid = fig.uid;
+  state.figures.push(fig);
+  applyPose(mannequin, pose || POSES_BY_ID.reposo_natural);
+  setHandlesVisible(mannequin, handlesOn());
+  return fig;
+}
+
+/** Figura activa (nunca null mientras haya al menos una). */
+function activeFigure() {
+  return state.figures.find((f) => f.uid === state.activeFigure) || state.figures[0];
+}
+
+/** Cambia la figura activa y reapunta el alias `man` y los controles. */
+function setActiveFigure(uid, { refreshUI = true } = {}) {
+  const fig = state.figures.find((f) => f.uid === uid);
+  if (!fig) return;
+  state.activeFigure = uid;
+  man = fig.man;
+  state.proportions = fig.proportions;
+  state.bodyType = fig.bodyType;
+  state.shading = fig.shading;
+  state.selectedBone = fig.selectedBone;
+  highlightFigures();
+  if (refreshUI) {
+    const bodySel = $('#bodyType');
+    if (bodySel) bodySel.value = fig.bodyType;
+    const shadeSel = $('#shading');
+    if (shadeSel) shadeSel.value = fig.shading;
+    buildProportionSliders();
+    selectBone(fig.selectedBone);
+    renderFigureList();
+    updateHud();
+  }
+  invalidate();
+}
+
+/** Resalta el manipulador de la figura activa y atenúa el de las demás. */
+function highlightFigures() {
+  const multi = state.figures.length > 1;
+  for (const f of state.figures) {
+    const on = f.uid === state.activeFigure;
+    for (const child of f.gizmo.children) child.material.opacity = on ? 0.9 : 0.3;
+    f.gizmo.scale.setScalar(on ? 1.06 : 0.94);
+    // Con una sola figura el manipulador estorba más de lo que aporta.
+    f.gizmo.visible = handlesOn() && multi;
+    // Los puntos de las figuras inactivas se atenúan para no confundir.
+    for (const h of f.man.handles) {
+      h.material.opacity = on
+        ? (h.userData.isIK ? 0.7 : 0.5)
+        : (h.userData.isIK ? 0.22 : 0.16);
+    }
+  }
+}
+
+function handlesOn() {
+  const c = $('#showHandles');
+  return c ? c.checked : true;
+}
+
+function removeFigure(uid) {
+  if (state.figures.length <= 1) return toast('Debe quedar al menos una figura');
+  const i = state.figures.findIndex((f) => f.uid === uid);
+  if (i < 0) return;
+  const fig = state.figures[i];
+  view.scene.remove(fig.group);
+  fig.group.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
+  state.figures.splice(i, 1);
+  if (state.activeFigure === uid) setActiveFigure(state.figures[Math.max(0, i - 1)].uid);
+  renderFigureList();
+  invalidate();
+}
+
+/** Coloca una figura nueva a un lado, sin encimarla sobre las existentes. */
+function nextFigureOffset() {
+  const used = state.figures.map((f) => f.group.position.x);
+  for (const x of [0.9, -0.9, 1.8, -1.8, 2.7, -2.7, 3.6, -3.6]) {
+    if (!used.some((u) => Math.abs(u - x) < 0.5)) return [x, 0];
+  }
+  return [used.length * 0.9, 0];
+}
 
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
@@ -105,8 +234,48 @@ function setBoneRotation(name, rotDeg, { mirror = true } = {}) {
   invalidate();
 }
 
+/** Estado serializable de una figura: pose + colocación + cuerpo. */
+function serializeFigure(fig) {
+  return {
+    name: fig.name,
+    at: [+fig.group.position.x.toFixed(3), +fig.group.position.z.toFixed(3)],
+    rotY: +(fig.group.rotation.y * R2D).toFixed(1),
+    bodyType: fig.bodyType,
+    proportions: { ...fig.proportions },
+    shading: fig.shading,
+    pose: readPose(fig.man),
+  };
+}
+
 function snapshotState() {
-  return { pose: readPose(man), props: state.props.map((p) => serializeProp(p)) };
+  return {
+    figures: state.figures.map(serializeFigure),
+    activeFigure: state.figures.findIndex((f) => f.uid === state.activeFigure),
+    props: state.props.map((p) => serializeProp(p)),
+  };
+}
+
+/** Reconstruye la escena entera desde una lista de figuras serializadas. */
+function loadFigures(list, { activeIndex = 0 } = {}) {
+  for (const f of state.figures) {
+    view.scene.remove(f.group);
+    f.group.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
+  }
+  state.figures.length = 0;
+  for (const spec of list) {
+    const fig = createFigure({
+      name: spec.name,
+      proportions: spec.proportions,
+      shading: spec.shading,
+      offset: spec.at || [0, 0],
+      rotY: spec.rotY || 0,
+      pose: { ...spec.pose, snap: false },
+    });
+    if (spec.bodyType) fig.bodyType = spec.bodyType;
+  }
+  const target = state.figures[Math.max(0, Math.min(activeIndex, state.figures.length - 1))];
+  setActiveFigure(target.uid);
+  renderFigureList();
 }
 
 function pushUndo() {
@@ -116,7 +285,9 @@ function pushUndo() {
 }
 
 function restoreState(snap) {
-  applyPose(man, { ...snap.pose, snap: false });
+  // `snap.pose` es el formato antiguo de una sola figura; se sigue aceptando.
+  if (snap.figures) loadFigures(snap.figures, { activeIndex: snap.activeFigure ?? 0 });
+  else applyPose(man, { ...snap.pose, snap: false });
   setProps(snap.props);
   syncBoneSliders();
   updateHud();
@@ -156,14 +327,8 @@ function addProp(spec) {
   const rec = { uid: propUid++, id: spec.id, pos: [...pos], rot: [...rot], scale, obj };
   obj.userData.uid = rec.uid;
   state.props.push(rec);
-  if (obj.userData.gizmo) obj.userData.gizmo.visible = propGizmosOn();
+  if (obj.userData.gizmo) obj.userData.gizmo.visible = handlesOn();
   return rec;
-}
-
-/** Los manipuladores de objeto comparten la casilla de "Controles". */
-function propGizmosOn() {
-  const c = $('#showHandles');
-  return c ? c.checked : true;
 }
 
 /** Vuelca la transformación real del objeto 3D al registro serializable. */
@@ -205,7 +370,10 @@ function applyPoseById(id, { record = true } = {}) {
   if (record) pushUndo();
   state.poseId = pose.id || pose.name;
   state.poseName = pose.name;
-  applyPose(man, pose);
+  // Una pose guardada como escena repuebla todas las figuras; una pose normal
+  // se aplica solo a la figura activa, para poder componer un grupo a mano.
+  if (pose.figures?.length) loadFigures(pose.figures);
+  else applyPose(man, pose);
   setProps(pose.props || []);
   if (pose.cam) {
     orbit.set(pose.cam);
@@ -235,17 +403,53 @@ function updatePointer(e) {
   pointer.y = -((e.clientY - r.top) / r.height) * 2 + 1;
 }
 
+/**
+ * Manipulador de articulación bajo el cursor, buscando en TODAS las figuras.
+ * Devuelve {handle, fig} para poder cambiar de figura activa al pinchar.
+ */
 function pickHandle(e) {
   updatePointer(e);
   raycaster.setFromCamera(pointer, view.camera);
-  const visible = man.handles.filter((h) => h.visible);
-  const hits = raycaster.intersectObjects(visible, false);
-  return hits.length ? hits[0].object : null;
+  const targets = [];
+  const owner = new Map();
+  for (const f of state.figures) {
+    for (const h of f.man.handles) {
+      if (!h.visible) continue;
+      targets.push(h);
+      owner.set(h, f);
+    }
+  }
+  if (!targets.length) return null;
+  const hits = raycaster.intersectObjects(targets, false);
+  if (!hits.length) return null;
+
+  // Con varias figuras, los puntos de la activa ganan si hay empate visual:
+  // así no se pierde el agarre al pasar por delante de otra figura.
+  const act = hits.find((h) => owner.get(h.object)?.uid === state.activeFigure);
+  const chosen = act && act.distance < hits[0].distance + 0.12 ? act : hits[0];
+  return { handle: chosen.object, fig: owner.get(chosen.object) };
+}
+
+/** Manipulador de colocación de figura bajo el cursor. */
+function pickFigureHandle(e) {
+  if (!handlesOn() || state.figures.length < 2) return null;
+  updatePointer(e);
+  raycaster.setFromCamera(pointer, view.camera);
+  const targets = [];
+  const owner = new Map();
+  for (const f of state.figures) {
+    if (!f.gizmo.visible) continue;
+    for (const c of f.gizmo.children) { targets.push(c); owner.set(c, f); }
+  }
+  if (!targets.length) return null;
+  const hits = raycaster.intersectObjects(targets, false);
+  if (!hits.length) return null;
+  return { fig: owner.get(hits[0].object), kind: hits[0].object.userData.propHandle };
 }
 
 /** Manipulador de objeto bajo el cursor: {rec, kind:'move'|'rotate'} o null. */
 function pickPropHandle(e) {
-  if (!propGizmosOn()) return null;
+  if (!handlesOn()) return null;
   updatePointer(e);
   raycaster.setFromCamera(pointer, view.camera);
   const targets = [];
@@ -274,10 +478,39 @@ function groundPoint(e, y) {
 canvas.addEventListener('pointerdown', (e) => {
   if (e.button !== 0 || drag) return;
 
-  // Los manipuladores del maniquí tienen prioridad; si no hay ninguno bajo el
-  // cursor, se prueban los de los objetos de escena.
-  const handle = pickHandle(e);
-  if (!handle) {
+  // Prioridad: articulaciones > colocación de figura > objetos de escena.
+  const hit = pickHandle(e);
+  if (!hit) {
+    const figGrip = pickFigureHandle(e);
+    if (figGrip) {
+      const { fig, kind } = figGrip;
+      const p = groundPoint(e, 0);
+      if (!p) return;
+      orbit.enabled = false;
+      canvas.classList.add('dragging');
+      e.preventDefault();
+      try { canvas.setPointerCapture(e.pointerId); } catch { /* noop */ }
+      pushUndo();
+      if (fig.uid !== state.activeFigure) setActiveFigure(fig.uid);
+
+      drag = kind === 'rotate'
+        ? {
+          mode: 'figRotate',
+          fig,
+          pointerId: e.pointerId,
+          startAngle: Math.atan2(p.x - fig.group.position.x, p.z - fig.group.position.z),
+          startRotY: fig.group.rotation.y,
+        }
+        : {
+          mode: 'figMove',
+          fig,
+          pointerId: e.pointerId,
+          offset: new THREE.Vector3().subVectors(fig.group.position, p),
+        };
+      e.stopPropagation();
+      return;
+    }
+
     const grip = pickPropHandle(e);
     if (!grip) return; // deja que la cámara orbite
 
@@ -319,6 +552,10 @@ canvas.addEventListener('pointerdown', (e) => {
   try { canvas.setPointerCapture(e.pointerId); } catch { /* noop */ }
   pushUndo();
 
+  // Pinchar un punto de otra figura la convierte en la activa.
+  const { handle, fig } = hit;
+  if (fig && fig.uid !== state.activeFigure) setActiveFigure(fig.uid);
+
   const boneName = handle.userData.boneName;
   selectBone(boneName);
 
@@ -339,10 +576,31 @@ canvas.addEventListener('pointerdown', (e) => {
 canvas.addEventListener('pointermove', (e) => {
   if (!drag) {
     // Cursor de "agarrable" cuando el puntero está sobre un manipulador.
-    canvas.classList.toggle('over-handle', !!pickHandle(e) || !!pickPropHandle(e));
+    canvas.classList.toggle(
+      'over-handle',
+      !!pickHandle(e) || !!pickFigureHandle(e) || !!pickPropHandle(e),
+    );
     return;
   }
   if (e.pointerId !== drag.pointerId) return;
+
+  if (drag.mode === 'figMove' || drag.mode === 'figRotate') {
+    const p = groundPoint(e, 0);
+    if (!p) return;
+    const g = drag.fig.group;
+    if (drag.mode === 'figMove') {
+      g.position.x = p.x + drag.offset.x;
+      g.position.z = p.z + drag.offset.z;
+    } else {
+      const angle = Math.atan2(p.x - g.position.x, p.z - g.position.z);
+      let rot = drag.startRotY + (angle - drag.startAngle);
+      if (e.shiftKey) rot = Math.round(rot / (15 * D2R)) * (15 * D2R);
+      g.rotation.y = rot;
+    }
+    updateHud();
+    invalidate();
+    return;
+  }
 
   if (drag.mode === 'propMove' || drag.mode === 'propRotate') {
     const p = groundPoint(e, drag.rec.obj.position.y);
@@ -461,8 +719,11 @@ function toast(msg) {
 
 function updateHud() {
   $('#hudPose').textContent = state.poseName || 'Pose libre';
-  $('#hudBone').textContent = BONE_BY_NAME[state.selectedBone]?.label || '';
-  $('#hudHeight').textContent = `${measureHeight(man).toFixed(2)} m`;
+  // Con varias figuras conviene saber sobre cuál se está trabajando.
+  const fig = activeFigure();
+  const who = state.figures.length > 1 && fig ? `${fig.name} · ` : '';
+  $('#hudBone').textContent = who + (BONE_BY_NAME[state.selectedBone]?.label || '');
+  $('#hudHeight').textContent = man ? `${measureHeight(man).toFixed(2)} m` : '';
 }
 
 /* ------------------------------------------------- biblioteca de poses */
@@ -520,7 +781,9 @@ function renderUserPoses() {
       pushUndo();
       state.poseName = p.name;
       state.poseId = p.name;
-      applyPose(man, { ...p, snap: false });
+      // Escena completa si el archivo la trae; si no, pose sobre la figura activa.
+      if (p.figures?.length) loadFigures(p.figures);
+      else applyPose(man, { ...p, snap: false });
       setProps(p.props || []);
       if (p.cam) orbit.set(p.cam);
       $('#poseName').value = p.name;
@@ -608,8 +871,11 @@ function syncBoneSliders() {
 function selectBone(name) {
   if (!BONE_BY_NAME[name]) return;
   state.selectedBone = name;
+  const fig = activeFigure();
+  if (fig) fig.selectedBone = name;
   $('#boneSelect').value = name;
-  for (const h of man.handles) {
+  // Solo se resalta en la figura activa; las demás las atenúa highlightFigures.
+  for (const h of (fig?.man || man).handles) {
     const on = h.userData.boneName === name;
     h.material.opacity = on ? 0.95 : (h.userData.isIK ? 0.7 : 0.5);
     h.scale.setScalar(on ? 1.35 : 1);
@@ -671,18 +937,26 @@ function buildProportionSliders() {
   }
 }
 
-/** Reconstruye la malla conservando la pose actual. */
+/** Reconstruye la malla de la figura activa conservando su pose. */
 function rebuildMannequin() {
-  const pose = readPose(man);
-  view.scene.remove(man.root);
-  man.root.traverse((o) => {
-    if (o.geometry) o.geometry.dispose();
-  });
-  man = buildMannequin(state.proportions, state.shading);
-  view.scene.add(man.root);
-  applyPose(man, { ...pose, snap: false });
-  setHandlesVisible(man, $('#showHandles').checked);
-  selectBone(state.selectedBone);
+  const fig = activeFigure();
+  if (!fig) return;
+  const pose = readPose(fig.man);
+
+  fig.group.remove(fig.man.root);
+  fig.man.root.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
+
+  fig.proportions = { ...state.proportions };
+  fig.shading = state.shading;
+  fig.bodyType = state.bodyType;
+  fig.man = buildMannequin(fig.proportions, fig.shading);
+  fig.group.add(fig.man.root);
+  man = fig.man;
+
+  applyPose(fig.man, { ...pose, snap: false });
+  setHandlesVisible(fig.man, handlesOn());
+  selectBone(fig.selectedBone);
+  highlightFigures();
   updateHud();
   invalidate();
 }
@@ -731,6 +1005,66 @@ function renderPropList() {
   }
 }
 
+function renderFigureList() {
+  const box = $('#figureList');
+  if (!box) return;
+  box.innerHTML = '';
+  for (const f of state.figures) {
+    const el = document.createElement('div');
+    el.className = `mini-item${f.uid === state.activeFigure ? ' on' : ''}`;
+    el.innerHTML = '<span class="nm"></span><button class="tiny ghost" data-a="x" title="Quitar">✕</button>';
+
+    const nm = el.querySelector('.nm');
+    nm.textContent = f.name;
+    nm.title = 'Clic para activar · doble clic para renombrar';
+    nm.onclick = () => setActiveFigure(f.uid);
+    // Electron no implementa window.prompt, así que el renombrado se hace con
+    // un campo en línea.
+    nm.ondblclick = () => {
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'rename';
+      input.value = f.name;
+      nm.replaceWith(input);
+      input.focus();
+      input.select();
+      const commit = () => {
+        const v = input.value.trim();
+        if (v) f.name = v;
+        renderFigureList();
+        updateHud();
+      };
+      input.onblur = commit;
+      input.onkeydown = (ev) => {
+        if (ev.key === 'Enter') { ev.preventDefault(); commit(); }
+        if (ev.key === 'Escape') { ev.preventDefault(); renderFigureList(); }
+        ev.stopPropagation();
+      };
+    };
+
+    el.querySelector('[data-a="x"]').onclick = () => removeFigure(f.uid);
+    box.appendChild(el);
+  }
+}
+
+function addFigure({ duplicate = false } = {}) {
+  pushUndo();
+  const src = duplicate ? activeFigure() : null;
+  const fig = createFigure({
+    proportions: src ? { ...src.proportions } : { ...BODY_TYPES[state.bodyType] },
+    shading: src ? src.shading : state.shading,
+    offset: nextFigureOffset(),
+    pose: src ? readPose(src.man) : POSES_BY_ID.reposo_natural,
+  });
+  if (src) {
+    fig.bodyType = src.bodyType;
+    fig.name = `${src.name} (copia)`;
+  }
+  setActiveFigure(fig.uid);
+  renderFigureList();
+  toast(duplicate ? 'Figura duplicada' : 'Figura añadida');
+}
+
 /* ------------------------------------------------------------- toolbar */
 
 function buildCameraPresets() {
@@ -762,6 +1096,8 @@ function buildShadingSelect() {
   sel.value = state.shading;
   sel.onchange = () => {
     state.shading = sel.value;
+    const fig = activeFigure();
+    if (fig) fig.shading = sel.value;
     setShading(man, sel.value);
     invalidate();
   };
@@ -804,9 +1140,15 @@ function actionGround() {
 async function actionSavePose() {
   const name = $('#poseName').value.trim();
   if (!name) return toast('Escribe un nombre para la pose');
+  // La pose de la figura activa se guarda también en la raíz del archivo para
+  // que las versiones anteriores (y la lista de "Mis poses") sigan leyéndolo.
   const pose = readPose(man, { name, id: name, cat: 'mis', tags: ['personalizada'] });
   pose.props = state.props.map(serializeProp);
   pose.cam = orbit.state;
+  if (state.figures.length > 1) {
+    pose.figures = state.figures.map(serializeFigure);
+    pose.tags = ['personalizada', 'escena', `${state.figures.length} figuras`];
+  }
   const res = await window.api.poses.save(pose);
   if (!res.ok) return toast(res.error || 'No se pudo guardar');
   state.poseName = name;
@@ -819,14 +1161,18 @@ async function actionSavePose() {
  * lámina de referencia sobran, y antes salían impresos en el PNG.
  */
 function snapshotClean(opts) {
-  const wereOn = propGizmosOn();
-  setHandlesVisible(man, false);
+  const wereOn = handlesOn();
+  for (const f of state.figures) {
+    setHandlesVisible(f.man, false);
+    f.gizmo.visible = false;
+  }
   setPropGizmosVisible(view.propsGroup, false);
   try {
     return view.snapshot(opts);
   } finally {
-    setHandlesVisible(man, wereOn);
+    for (const f of state.figures) setHandlesVisible(f.man, wereOn);
     setPropGizmosVisible(view.propsGroup, wereOn);
+    highlightFigures();
     invalidate();
   }
 }
@@ -862,10 +1208,15 @@ function wire() {
   $('#showGrid').onchange = (e) => { view.setGridVisible(e.target.checked); invalidate(); };
   $('#showShadow').onchange = (e) => { view.setShadowsEnabled(e.target.checked); invalidate(); };
   $('#showHandles').onchange = (e) => {
-    setHandlesVisible(man, e.target.checked);
+    for (const f of state.figures) setHandlesVisible(f.man, e.target.checked);
     setPropGizmosVisible(view.propsGroup, e.target.checked);
+    highlightFigures();
+    selectBone(state.selectedBone);
     invalidate();
   };
+
+  $('#btnAddFigure').onclick = () => addFigure();
+  $('#btnDupFigure').onclick = () => addFigure({ duplicate: true });
 
   $('#lightAngle').oninput = (e) => {
     view.setLightAngle(+e.target.value);
@@ -942,6 +1293,12 @@ function wire() {
 function init() {
   renderCategoryChips();
   renderPoseList();
+
+  // La primera figura tiene que existir antes de construir los controles: casi
+  // todos leen del maniquí activo.
+  const first = createFigure({ name: 'Figura 1' });
+  setActiveFigure(first.uid, { refreshUI: false });
+
   buildBoneSelect();
   buildBoneSliders();
   buildBodyTypeSelect();
@@ -950,14 +1307,16 @@ function init() {
   buildCameraPresets();
   buildShadingSelect();
   renderPropList();
+  renderFigureList();
   wire();
 
   view.setLightAngle(40);
   applyPoseById('reposo_natural', { record: false });
   // Sincroniza los manipuladores con la casilla: si no, el estado visible del
   // maniquí y el de la interfaz pueden salir desalineados al arrancar.
-  setHandlesVisible(man, $('#showHandles').checked);
+  for (const f of state.figures) setHandlesVisible(f.man, $('#showHandles').checked);
   setPropGizmosVisible(view.propsGroup, $('#showHandles').checked);
+  highlightFigures();
   selectBone('chest');
   loadUserPoses();
   view.resize();
@@ -967,4 +1326,8 @@ function init() {
 init();
 
 // Expuesto para depuración manual desde DevTools (npm run dev)
-window.__studio = { state, man, view, orbit, applyPoseById, THREE };
+window.__studio = {
+  state, view, orbit, applyPoseById, THREE,
+  get man() { return man; },
+  get figures() { return state.figures; },
+};

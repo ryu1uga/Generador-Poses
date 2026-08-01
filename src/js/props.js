@@ -173,6 +173,52 @@ const BUILDERS = {
   },
 };
 
+/* --------------------------------------------------- manipuladores de prop */
+
+/**
+ * Cada objeto lleva dos manipuladores en su base:
+ *   · un disco verde  -> arrastrar por el suelo (X/Z)
+ *   · un anillo verde -> girar sobre el eje vertical
+ *
+ * Van en un grupo aparte para poder ocultarlos al exportar el PNG y para que
+ * el raycast los distinga de la geometría del objeto.
+ */
+function buildPropGizmo(radius) {
+  const g = new THREE.Group();
+  g.name = 'propGizmo';
+  g.userData.isPropGizmo = true;
+
+  const mkMat = (color) => new THREE.MeshBasicMaterial({
+    color, transparent: true, opacity: 0.75, depthTest: false, side: THREE.DoubleSide,
+  });
+
+  // Disco de desplazamiento
+  const move = new THREE.Mesh(new THREE.CircleGeometry(radius * 0.46, 28), mkMat(0x7bdc8b));
+  move.rotation.x = -Math.PI / 2;
+  move.position.y = 0.006;
+  move.renderOrder = 998;
+  move.userData = { propHandle: 'move' };
+  g.add(move);
+
+  // Anillo de giro
+  const ring = new THREE.Mesh(new THREE.RingGeometry(radius * 0.74, radius * 0.96, 40), mkMat(0x4fc3f7));
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.y = 0.005;
+  ring.renderOrder = 998;
+  ring.userData = { propHandle: 'rotate' };
+  g.add(ring);
+
+  // Muesca que indica hacia dónde mira el objeto
+  const notch = new THREE.Mesh(new THREE.CircleGeometry(radius * 0.09, 12), mkMat(0x4fc3f7));
+  notch.rotation.x = -Math.PI / 2;
+  notch.position.set(0, 0.007, radius * 0.85);
+  notch.renderOrder = 999;
+  notch.userData = { propHandle: 'rotate' };
+  g.add(notch);
+
+  return g;
+}
+
 /** Crea el objeto 3D de un prop por id. Devuelve null si el id no existe. */
 export function createProp(id) {
   const build = BUILDERS[id];
@@ -180,7 +226,41 @@ export function createProp(id) {
   const g = build();
   g.name = `prop:${id}`;
   g.userData.propId = id;
+
+  // El radio del gizmo se saca de la huella real del objeto, así el de una
+  // pared no queda del mismo tamaño que el de un gato.
+  const bb = new THREE.Box3().setFromObject(g);
+  const size = bb.getSize(new THREE.Vector3());
+  const radius = Math.max(0.34, Math.min(1.3, Math.max(size.x, size.z) * 0.62));
+
+  const gizmo = buildPropGizmo(radius);
+  // Centrado en la huella del objeto, no en su origen, para que caiga debajo.
+  gizmo.position.set((bb.min.x + bb.max.x) / 2, 0, (bb.min.z + bb.max.z) / 2);
+  g.add(gizmo);
+  g.userData.gizmo = gizmo;
+  g.userData.gizmoHandles = gizmo.children;
+
   return g;
+}
+
+/** Muestra u oculta los manipuladores de todos los props de un grupo. */
+export function setPropGizmosVisible(propsGroup, visible) {
+  for (const obj of propsGroup.children) {
+    if (obj.userData.gizmo) obj.userData.gizmo.visible = visible;
+  }
+}
+
+/** Resalta el manipulador del prop seleccionado. */
+export function highlightPropGizmo(propsGroup, uid) {
+  for (const obj of propsGroup.children) {
+    const gz = obj.userData.gizmo;
+    if (!gz) continue;
+    const on = obj.userData.uid === uid;
+    for (const child of gz.children) {
+      child.material.opacity = on ? 0.95 : 0.42;
+    }
+    gz.scale.setScalar(on ? 1.08 : 1);
+  }
 }
 
 /** Ids con constructor disponible (se usa en los tests). */

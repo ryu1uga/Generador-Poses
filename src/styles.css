@@ -8,6 +8,8 @@
   --accent: #ffb74d;
   --accent-2: #4fc3f7;
   --radius: 8px;
+  --col-left: 268px;
+  --col-right: 300px;
 }
 
 * { box-sizing: border-box; }
@@ -24,8 +26,10 @@ html, body {
 
 #app {
   display: grid;
-  grid-template-columns: 268px 1fr 300px;
-  height: 100vh;
+  grid-template-columns: var(--col-left) minmax(0, 1fr) var(--col-right);
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .panel {
@@ -34,15 +38,29 @@ html, body {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
+  overflow: hidden;
 }
+
+/* En una columna flex los hijos se encogen por defecto: eso aplastaba las
+   secciones y recortaba el contenido de abajo en vez de dejar que apareciera
+   la barra de desplazamiento. */
+.panel > .panel-head,
+.panel > .pad,
+.panel > .section { flex: 0 0 auto; }
 
 #controls {
   border-right: none;
   border-left: 1px solid var(--line);
+  /* Bloque normal + scroll: nada se comprime, todo es alcanzable. */
+  display: block;
   overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  padding-bottom: 16px;
 }
 
-.scroll { overflow-y: auto; }
+.scroll { overflow-y: auto; overscroll-behavior: contain; }
 .scroll::-webkit-scrollbar { width: 9px; }
 .scroll::-webkit-scrollbar-thumb { background: #333a48; border-radius: 5px; }
 .scroll::-webkit-scrollbar-track { background: transparent; }
@@ -193,7 +211,10 @@ input[type="range"].axis-z::-webkit-slider-thumb { background: #64b5f6; }
 
 /* ------------------------------------------------------------- listas */
 
-.list { padding: 6px; flex: 1; min-height: 0; }
+#library { overflow-y: auto; }
+
+.list { padding: 6px; flex: 1 1 auto; min-height: 0; }
+#poseList { min-height: 120px; }
 .list.small { max-height: 148px; }
 
 .pose-item {
@@ -228,7 +249,8 @@ input[type="range"].axis-z::-webkit-slider-thumb { background: #64b5f6; }
   font-size: 12px;
 }
 
-.mini-item .nm { flex: 1; }
+.mini-item.on { border-color: #4a8f5c; background: #24312a; }
+.mini-item .nm { flex: 1; cursor: pointer; }
 .mini-item button { padding: 1px 7px; font-size: 12px; line-height: 1.3; }
 
 /* -------------------------------------------------------------- stage */
@@ -252,9 +274,13 @@ input[type="range"].axis-z::-webkit-slider-thumb { background: #64b5f6; }
 .tool-field input[type="range"] { width: 92px; }
 .tool-field output { color: var(--txt); font-variant-numeric: tabular-nums; min-width: 34px; }
 
-#viewport { position: relative; flex: 1; min-height: 0; }
-#canvas { display: block; width: 100%; height: 100%; cursor: grab; }
-#canvas.dragging { cursor: grabbing; }
+/* touch-action: none evita que el navegador se quede los gestos del trackpad
+   y dispare pointercancel a mitad de un arrastre. */
+#viewport { position: relative; flex: 1; min-height: 0; touch-action: none; overscroll-behavior: contain; }
+#canvas { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
+#canvas.over-handle { cursor: pointer; }
+#canvas.dragging,
+#canvas.dragging.over-handle { cursor: grabbing; }
 
 #hud {
   position: absolute;
@@ -313,4 +339,39 @@ kbd {
   font: inherit;
   font-size: 11px;
   color: var(--txt);
+}
+
+/* ------------------------------------------------------- adaptable */
+
+/* Pantallas estrechas: paneles laterales más finos y toolbar compacta. */
+@media (max-width: 1240px) {
+  :root { --col-left: 224px; --col-right: 260px; }
+  .tool-field select { min-width: 104px; }
+  .tool-field input[type="range"] { width: 72px; }
+}
+
+@media (max-width: 1060px) {
+  :root { --col-left: 196px; --col-right: 236px; }
+  #toolbar { gap: 8px; padding: 6px 8px; }
+  .tool-field span { display: none; }
+}
+
+/* Pantallas bajas (portátiles 768p, escalado de Windows al 125/150 %):
+   se recorta el aire vertical para que nada quede fuera. */
+@media (max-height: 820px) {
+  .pad { padding: 8px 10px; gap: 6px; }
+  .section-title { padding: 7px 12px 1px; }
+  .list.small { max-height: 104px; }
+  #poseList { min-height: 90px; }
+}
+
+@media (max-height: 700px) {
+  html, body { font-size: 12px; }
+  .pad { padding: 6px 10px; gap: 5px; }
+  .section-title { padding: 5px 12px 0; font-size: 10.5px; }
+  .list.small { max-height: 82px; }
+  #poseList { min-height: 70px; }
+  #toolbar { padding: 5px 8px; }
+  #hint { display: none; }
+  .keys { display: none; }
 }

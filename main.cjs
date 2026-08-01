@@ -1,4 +1,6 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, nativeImage, clipboard } = require('electron');
+const {
+  app, BrowserWindow, ipcMain, dialog, shell, nativeImage, clipboard, screen,
+} = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 
@@ -27,11 +29,19 @@ function writeUserPoses(list) {
 let win = null;
 
 function createWindow() {
+  // El tamaño ideal es 1500x940, pero en pantallas de 1080p con escalado de
+  // Windows al 125/150 % el área útil en DIP es mucho menor y la ventana
+  // quedaba más alta que el escritorio: la parte de abajo se salía.
+  const { workAreaSize } = screen.getPrimaryDisplay();
+  const width = Math.min(1500, workAreaSize.width - 40);
+  const height = Math.min(940, workAreaSize.height - 40);
+
   win = new BrowserWindow({
-    width: 1500,
-    height: 940,
-    minWidth: 1080,
-    minHeight: 680,
+    width,
+    height,
+    minWidth: Math.min(960, width),
+    minHeight: Math.min(600, height),
+    center: true,
     backgroundColor: '#14161c',
     title: 'Manga Pose Studio',
     show: false,
@@ -41,12 +51,29 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      zoomFactor: 1,
     },
   });
 
   win.loadFile(path.join(__dirname, 'src', 'index.html'));
-  win.once('ready-to-show', () => win.show());
+  win.once('ready-to-show', () => {
+    // Si aun así no cabe (varios monitores, barra de tareas ancha), maximiza.
+    const bounds = win.getBounds();
+    const area = screen.getDisplayMatching(bounds).workArea;
+    if (bounds.height > area.height || bounds.width > area.width) win.maximize();
+    win.show();
+  });
   if (isDev) win.webContents.openDevTools({ mode: 'detach' });
+
+  /* Zoom de la interfaz: Ctrl + / Ctrl - / Ctrl 0 */
+  const setZoom = (z) => win.webContents.setZoomFactor(Math.max(0.6, Math.min(1.6, z)));
+  win.webContents.on('before-input-event', (e, input) => {
+    if (input.type !== 'keyDown' || !input.control) return;
+    const z = win.webContents.getZoomFactor();
+    if (input.key === '0') { setZoom(1); e.preventDefault(); }
+    else if (input.key === '+' || input.key === '=') { setZoom(z + 0.1); e.preventDefault(); }
+    else if (input.key === '-') { setZoom(z - 0.1); e.preventDefault(); }
+  });
 
   // Los links externos se abren en el navegador, no dentro de la app.
   win.webContents.setWindowOpenHandler(({ url }) => {

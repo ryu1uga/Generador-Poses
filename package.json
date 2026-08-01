@@ -14,6 +14,7 @@
     "fix:electron:manual": "node scripts/install-electron-manual.mjs",
     "start": "electron .",
     "dev": "electron . --dev",
+    "start:soft": "electron . --dev --use-angle=swiftshader --ignore-gpu-blocklist",
     "test": "node --test \"test/**/*.test.mjs\"",
     "test:watch": "node --test --watch \"test/**/*.test.mjs\"",
     "dist": "npm run vendor && electron-builder --win --x64",

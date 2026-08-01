@@ -28,67 +28,120 @@ export class OrbitCamera {
 
     this.enabled = true;
     this.rotateSpeed = 0.42;
-    this.panSpeed = 0.0022;
+    this.zoomSpeed = 0.0012;
 
-    this._dragging = null; // 'orbit' | 'pan'
+    /**
+     * Se invoca cada vez que la cámara cambia. El bucle de render es "bajo
+     * demanda" (solo pinta cuando algo se movió), así que sin esto la cámara
+     * se movía de verdad pero la pantalla no se repintaba nunca: el arrastre
+     * parecía no hacer nada en absoluto.
+     * @type {null | (() => void)}
+     */
+    this.onChange = null;
+
+    this._dragging = null;   // 'orbit' | 'pan'
+    this._pointerId = null;  // puntero que inició el arrastre
     this._last = { x: 0, y: 0 };
+    this._right = new THREE.Vector3();
+    this._up = new THREE.Vector3();
+    this._fwd = new THREE.Vector3();
 
     this._onDown = this._onDown.bind(this);
     this._onMove = this._onMove.bind(this);
     this._onUp = this._onUp.bind(this);
     this._onWheel = this._onWheel.bind(this);
     this._onContext = (e) => e.preventDefault();
+    // Si la ventana pierde el foco mientras arrastras, el pointerup nunca
+    // llega: sin esto la cámara se queda girando sola.
+    this._onBlur = () => this._stop();
 
     this.dom.addEventListener('pointerdown', this._onDown);
-    window.addEventListener('pointermove', this._onMove);
-    window.addEventListener('pointerup', this._onUp);
+    this.dom.addEventListener('pointermove', this._onMove);
+    this.dom.addEventListener('pointerup', this._onUp);
+    this.dom.addEventListener('pointercancel', this._onUp);
+    this.dom.addEventListener('lostpointercapture', this._onUp);
     this.dom.addEventListener('wheel', this._onWheel, { passive: false });
     this.dom.addEventListener('contextmenu', this._onContext);
+    window.addEventListener('blur', this._onBlur);
 
     this.update();
   }
 
   dispose() {
     this.dom.removeEventListener('pointerdown', this._onDown);
-    window.removeEventListener('pointermove', this._onMove);
-    window.removeEventListener('pointerup', this._onUp);
+    this.dom.removeEventListener('pointermove', this._onMove);
+    this.dom.removeEventListener('pointerup', this._onUp);
+    this.dom.removeEventListener('pointercancel', this._onUp);
+    this.dom.removeEventListener('lostpointercapture', this._onUp);
     this.dom.removeEventListener('wheel', this._onWheel);
     this.dom.removeEventListener('contextmenu', this._onContext);
+    window.removeEventListener('blur', this._onBlur);
+  }
+
+  /** Corta cualquier arrastre en curso y suelta la captura del puntero. */
+  _stop() {
+    if (this._pointerId !== null) {
+      try { this.dom.releasePointerCapture(this._pointerId); } catch { /* noop */ }
+    }
+    this._dragging = null;
+    this._pointerId = null;
   }
 
   _onDown(e) {
     if (!this.enabled) return;
-    if (e.button === 0) this._dragging = 'orbit';
+    if (this._dragging) return;            // ya hay un botón pulsado
+
+    if (e.button === 0) this._dragging = e.shiftKey ? 'pan' : 'orbit';
     else if (e.button === 1 || e.button === 2) this._dragging = 'pan';
+    else return;
+
+    this._pointerId = e.pointerId;
     this._last = { x: e.clientX, y: e.clientY };
+    // Evita el autoscroll del botón central y el drag nativo de selección.
+    e.preventDefault();
+    try { this.dom.setPointerCapture(e.pointerId); } catch { /* noop */ }
   }
 
   _onMove(e) {
-    if (!this._dragging) return;
+    if (!this._dragging || e.pointerId !== this._pointerId) return;
+    if (!this.enabled) { this._stop(); return; }
+
     const dx = e.clientX - this._last.x;
     const dy = e.clientY - this._last.y;
+    if (dx === 0 && dy === 0) return;
     this._last = { x: e.clientX, y: e.clientY };
 
     if (this._dragging === 'orbit') {
       this.theta -= dx * this.rotateSpeed;
+      // Mantiene theta acotado para que no crezca sin límite.
+      this.theta = ((this.theta % 360) + 360) % 360;
       this.phi = Math.max(this.minPhi, Math.min(this.maxPhi, this.phi - dy * this.rotateSpeed));
     } else {
-      const scale = this.dist * this.panSpeed;
-      const right = new THREE.Vector3();
-      const up = new THREE.Vector3();
-      this.camera.matrixWorld.extractBasis(right, up, new THREE.Vector3());
-      this.target.addScaledVector(right, -dx * scale);
-      this.target.addScaledVector(up, dy * scale);
+      // Unidades de mundo por píxel: así el desplazamiento sigue al cursor
+      // con exactitud sea cual sea la distancia o el ángulo de lente.
+      const h = this.dom.clientHeight || 1;
+      const scale = (2 * this.dist * Math.tan((this.camera.fov * D2R) / 2)) / h;
+      this.camera.matrixWorld.extractBasis(this._right, this._up, this._fwd);
+      this.target.addScaledVector(this._right, -dx * scale);
+      this.target.addScaledVector(this._up, dy * scale);
     }
     this.update();
   }
 
-  _onUp() { this._dragging = null; }
+  _onUp(e) {
+    if (e && e.pointerId !== undefined && e.pointerId !== this._pointerId) return;
+    this._stop();
+  }
 
   _onWheel(e) {
     if (!this.enabled) return;
     e.preventDefault();
-    const factor = Math.exp(e.deltaY * 0.0012);
+    // deltaMode: 0 = píxeles, 1 = líneas, 2 = páginas. Algunos ratones de
+    // Windows reportan líneas (deltaY ≈ 3) y sin normalizar el zoom no se nota.
+    const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? (this.dom.clientHeight || 800) : 1;
+    // Acotado para que un golpe de rueda o un trackpad brusco no dispare el zoom.
+    const delta = Math.max(-240, Math.min(240, e.deltaY * unit));
+    const factor = Math.exp(delta * this.zoomSpeed);
     this.dist = Math.max(this.minDist, Math.min(this.maxDist, this.dist * factor));
     this.update();
   }
@@ -105,6 +158,7 @@ export class OrbitCamera {
     );
     this.camera.lookAt(this.target);
     this.camera.updateMatrixWorld();
+    if (this.onChange) this.onChange();
   }
 
   /** Aplica un preset de cámara (el que trae cada pose). */

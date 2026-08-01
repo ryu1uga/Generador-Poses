@@ -1,7 +1,7 @@
 import * as THREE from '../vendor/three.module.js';
 import { createScene } from './scene.js';
 import { OrbitCamera, CAMERA_PRESETS } from './orbit.js';
-import { createProp } from './props.js';
+import { createProp, setPropGizmosVisible, highlightPropGizmo } from './props.js';
 import {
   POSES, POSES_BY_ID, CATEGORIES, PROP_IDS, PROP_LABELS,
   searchPoses, clonePose, mirrorBones, naturalize,
@@ -32,6 +32,7 @@ const state = {
   proportions: { ...BODY_TYPES.shonen },
   shading: 'madera',
   props: [],
+  selectedProp: null,
   userPoses: [],
   category: 'todas',
   query: '',
@@ -57,6 +58,9 @@ const pointer = new THREE.Vector2();
 let needsRender = true;
 const invalidate = () => { needsRender = true; };
 
+// Sin esto la cámara se movía pero el lienzo no se repintaba.
+orbit.onChange = invalidate;
+
 function loop() {
   if (needsRender) {
     view.render();
@@ -65,7 +69,13 @@ function loop() {
   requestAnimationFrame(loop);
 }
 loop();
-window.addEventListener('resize', invalidate);
+
+// ResizeObserver en vez de solo 'resize': el visor también cambia de tamaño
+// cuando la barra de herramientas pasa a dos líneas o cambia el zoom de la UI,
+// y en esos casos no hay evento de ventana.
+const ro = new ResizeObserver(() => { view.resize(); invalidate(); });
+ro.observe(viewport);
+window.addEventListener('resize', () => { view.resize(); invalidate(); });
 
 /* ================================================== utilidades de pose */
 
@@ -144,8 +154,28 @@ function addProp(spec) {
   obj.scale.setScalar(scale);
   view.propsGroup.add(obj);
   const rec = { uid: propUid++, id: spec.id, pos: [...pos], rot: [...rot], scale, obj };
+  obj.userData.uid = rec.uid;
   state.props.push(rec);
+  if (obj.userData.gizmo) obj.userData.gizmo.visible = propGizmosOn();
   return rec;
+}
+
+/** Los manipuladores de objeto comparten la casilla de "Controles". */
+function propGizmosOn() {
+  const c = $('#showHandles');
+  return c ? c.checked : true;
+}
+
+/** Vuelca la transformación real del objeto 3D al registro serializable. */
+function syncPropRecord(rec) {
+  rec.pos = [rec.obj.position.x, rec.obj.position.y, rec.obj.position.z];
+  rec.rot = [rec.obj.rotation.x * R2D, rec.obj.rotation.y * R2D, rec.obj.rotation.z * R2D];
+}
+
+function selectProp(uid) {
+  state.selectedProp = uid;
+  highlightPropGizmo(view.propsGroup, uid);
+  invalidate();
 }
 
 function removeProp(uid) {
@@ -153,6 +183,7 @@ function removeProp(uid) {
   if (i < 0) return;
   view.propsGroup.remove(state.props[i].obj);
   state.props.splice(i, 1);
+  if (state.selectedProp === uid) state.selectedProp = null;
   renderPropList();
   invalidate();
 }
@@ -160,6 +191,7 @@ function removeProp(uid) {
 function setProps(list = []) {
   for (const p of state.props) view.propsGroup.remove(p.obj);
   state.props.length = 0;
+  state.selectedProp = null;
   for (const spec of list) addProp(spec);
   renderPropList();
   invalidate();
@@ -192,6 +224,8 @@ function applyPoseById(id, { record = true } = {}) {
 
 let drag = null;
 const dragPlane = new THREE.Plane();
+const groundPlane = new THREE.Plane();
+const UP = new THREE.Vector3(0, 1, 0);
 const hitPoint = new THREE.Vector3();
 const grabOffset = new THREE.Vector3();
 
@@ -209,14 +243,80 @@ function pickHandle(e) {
   return hits.length ? hits[0].object : null;
 }
 
+/** Manipulador de objeto bajo el cursor: {rec, kind:'move'|'rotate'} o null. */
+function pickPropHandle(e) {
+  if (!propGizmosOn()) return null;
+  updatePointer(e);
+  raycaster.setFromCamera(pointer, view.camera);
+  const targets = [];
+  for (const rec of state.props) {
+    const gz = rec.obj.userData.gizmo;
+    if (gz && gz.visible) targets.push(...gz.children);
+  }
+  if (!targets.length) return null;
+  const hits = raycaster.intersectObjects(targets, false);
+  if (!hits.length) return null;
+  const obj = hits[0].object;
+  // El grupo del prop es el abuelo del manipulador (prop > gizmo > disco).
+  const rec = state.props.find((p) => p.obj === obj.parent?.parent);
+  if (!rec) return null;
+  return { rec, kind: obj.userData.propHandle };
+}
+
+/** Punto donde el rayo del cursor corta el plano horizontal a la altura y. */
+function groundPoint(e, y) {
+  updatePointer(e);
+  raycaster.setFromCamera(pointer, view.camera);
+  groundPlane.set(UP, -y);
+  return raycaster.ray.intersectPlane(groundPlane, hitPoint) ? hitPoint.clone() : null;
+}
+
 canvas.addEventListener('pointerdown', (e) => {
-  if (e.button !== 0) return;
+  if (e.button !== 0 || drag) return;
+
+  // Los manipuladores del maniquí tienen prioridad; si no hay ninguno bajo el
+  // cursor, se prueban los de los objetos de escena.
   const handle = pickHandle(e);
-  if (!handle) return; // deja que la cámara orbite
+  if (!handle) {
+    const grip = pickPropHandle(e);
+    if (!grip) return; // deja que la cámara orbite
+
+    const { rec, kind } = grip;
+    const p = groundPoint(e, rec.obj.position.y);
+    if (!p) return;
+
+    orbit.enabled = false;
+    canvas.classList.add('dragging');
+    e.preventDefault();
+    try { canvas.setPointerCapture(e.pointerId); } catch { /* noop */ }
+    pushUndo();
+    selectProp(rec.uid);
+
+    if (kind === 'rotate') {
+      const c = rec.obj.position;
+      drag = {
+        mode: 'propRotate',
+        rec,
+        pointerId: e.pointerId,
+        startAngle: Math.atan2(p.x - c.x, p.z - c.z),
+        startRotY: rec.obj.rotation.y,
+      };
+    } else {
+      drag = {
+        mode: 'propMove',
+        rec,
+        pointerId: e.pointerId,
+        offset: new THREE.Vector3().subVectors(rec.obj.position, p),
+      };
+    }
+    e.stopPropagation();
+    return;
+  }
 
   orbit.enabled = false;
   canvas.classList.add('dragging');
-  canvas.setPointerCapture(e.pointerId);
+  e.preventDefault();
+  try { canvas.setPointerCapture(e.pointerId); } catch { /* noop */ }
   pushUndo();
 
   const boneName = handle.userData.boneName;
@@ -229,18 +329,41 @@ canvas.addEventListener('pointerdown', (e) => {
     raycaster.setFromCamera(pointer, view.camera);
     raycaster.ray.intersectPlane(dragPlane, hitPoint);
     grabOffset.copy(world).sub(hitPoint);
-    drag = { mode: 'ik', boneName };
+    drag = { mode: 'ik', boneName, pointerId: e.pointerId };
   } else {
-    drag = { mode: 'fk', boneName, last: { x: e.clientX, y: e.clientY } };
+    drag = { mode: 'fk', boneName, pointerId: e.pointerId, last: { x: e.clientX, y: e.clientY } };
   }
   e.stopPropagation();
 });
 
-window.addEventListener('pointermove', (e) => {
+canvas.addEventListener('pointermove', (e) => {
   if (!drag) {
-    // Resalte suave del manipulador bajo el cursor
+    // Cursor de "agarrable" cuando el puntero está sobre un manipulador.
+    canvas.classList.toggle('over-handle', !!pickHandle(e) || !!pickPropHandle(e));
     return;
   }
+  if (e.pointerId !== drag.pointerId) return;
+
+  if (drag.mode === 'propMove' || drag.mode === 'propRotate') {
+    const p = groundPoint(e, drag.rec.obj.position.y);
+    if (!p) return;
+    if (drag.mode === 'propMove') {
+      drag.rec.obj.position.x = p.x + drag.offset.x;
+      drag.rec.obj.position.z = p.z + drag.offset.z;
+    } else {
+      const c = drag.rec.obj.position;
+      const angle = Math.atan2(p.x - c.x, p.z - c.z);
+      let rot = drag.startRotY + (angle - drag.startAngle);
+      // Con Shift el giro se engancha de 15 en 15 grados.
+      if (e.shiftKey) rot = Math.round(rot / (15 * D2R)) * (15 * D2R);
+      drag.rec.obj.rotation.y = rot;
+    }
+    syncPropRecord(drag.rec);
+    updateHud();
+    invalidate();
+    return;
+  }
+
   if (drag.mode === 'ik') {
     updatePointer(e);
     raycaster.setFromCamera(pointer, view.camera);
@@ -270,13 +393,21 @@ window.addEventListener('pointermove', (e) => {
   invalidate();
 });
 
-window.addEventListener('pointerup', (e) => {
+function endDrag(e) {
   if (!drag) return;
+  if (e && e.pointerId !== undefined && e.pointerId !== drag.pointerId) return;
+  const id = drag.pointerId;
   drag = null;
   orbit.enabled = true;
   canvas.classList.remove('dragging');
-  try { canvas.releasePointerCapture(e.pointerId); } catch { /* noop */ }
-});
+  try { canvas.releasePointerCapture(id); } catch { /* noop */ }
+}
+
+canvas.addEventListener('pointerup', endDrag);
+canvas.addEventListener('pointercancel', endDrag);
+canvas.addEventListener('lostpointercapture', endDrag);
+// Si la ventana pierde el foco a mitad de un arrastre no llega el pointerup.
+window.addEventListener('blur', () => endDrag());
 
 const _camRight = new THREE.Vector3();
 const _camUp = new THREE.Vector3();
@@ -578,12 +709,21 @@ function renderPropList() {
   }
   for (const p of state.props) {
     const el = document.createElement('div');
-    el.className = 'mini-item';
-    el.innerHTML = `<span class="nm"></span><button class="tiny ghost" data-a="z">↺</button><button class="tiny ghost" data-a="x">✕</button>`;
+    el.className = `mini-item${state.selectedProp === p.uid ? ' on' : ''}`;
+    el.innerHTML = `<span class="nm"></span><button class="tiny ghost" data-a="c" title="Centrar en el origen">⌖</button><button class="tiny ghost" data-a="z" title="Girar 45°">↺</button><button class="tiny ghost" data-a="x" title="Quitar">✕</button>`;
     el.querySelector('.nm').textContent = PROP_LABELS[p.id] || p.id;
+    el.querySelector('.nm').onclick = () => { selectProp(p.uid); renderPropList(); };
+    el.querySelector('[data-a="c"]').onclick = () => {
+      pushUndo();
+      p.obj.position.x = 0;
+      p.obj.position.z = 0;
+      syncPropRecord(p);
+      invalidate();
+    };
     el.querySelector('[data-a="z"]').onclick = () => {
-      p.rot[1] = (p.rot[1] + 45) % 360;
-      p.obj.rotation.y = p.rot[1] * D2R;
+      pushUndo();
+      p.obj.rotation.y += 45 * D2R;
+      syncPropRecord(p);
       invalidate();
     };
     el.querySelector('[data-a="x"]').onclick = () => removeProp(p.uid);
@@ -674,8 +814,25 @@ async function actionSavePose() {
   loadUserPoses();
 }
 
+/**
+ * Captura sin manipuladores. Los puntos de color son ayudas de edición: en una
+ * lámina de referencia sobran, y antes salían impresos en el PNG.
+ */
+function snapshotClean(opts) {
+  const wereOn = propGizmosOn();
+  setHandlesVisible(man, false);
+  setPropGizmosVisible(view.propsGroup, false);
+  try {
+    return view.snapshot(opts);
+  } finally {
+    setHandlesVisible(man, wereOn);
+    setPropGizmosVisible(view.propsGroup, wereOn);
+    invalidate();
+  }
+}
+
 async function actionExportPng() {
-  const url = view.snapshot({ transparent: $('#pngTransparent').checked, scale: 2 });
+  const url = snapshotClean({ transparent: $('#pngTransparent').checked, scale: 2 });
   const base = (state.poseName || 'pose').replace(/[^\w\-áéíóúñü ]+/gi, '').trim() || 'pose';
   const res = await window.api.image.save(url, `${base}.png`);
   if (res.ok) toast('PNG guardado');
@@ -683,7 +840,7 @@ async function actionExportPng() {
 }
 
 async function actionCopyImage() {
-  const url = view.snapshot({ transparent: false, scale: 2 });
+  const url = snapshotClean({ transparent: false, scale: 2 });
   await window.api.image.toClipboard(url);
   toast('Imagen copiada al portapapeles');
 }
@@ -704,7 +861,11 @@ function wire() {
   $('#background').onchange = (e) => { view.setBackground(e.target.value); invalidate(); };
   $('#showGrid').onchange = (e) => { view.setGridVisible(e.target.checked); invalidate(); };
   $('#showShadow').onchange = (e) => { view.setShadowsEnabled(e.target.checked); invalidate(); };
-  $('#showHandles').onchange = (e) => { setHandlesVisible(man, e.target.checked); invalidate(); };
+  $('#showHandles').onchange = (e) => {
+    setHandlesVisible(man, e.target.checked);
+    setPropGizmosVisible(view.propsGroup, e.target.checked);
+    invalidate();
+  };
 
   $('#lightAngle').oninput = (e) => {
     view.setLightAngle(+e.target.value);
@@ -793,6 +954,10 @@ function init() {
 
   view.setLightAngle(40);
   applyPoseById('reposo_natural', { record: false });
+  // Sincroniza los manipuladores con la casilla: si no, el estado visible del
+  // maniquí y el de la interfaz pueden salir desalineados al arrancar.
+  setHandlesVisible(man, $('#showHandles').checked);
+  setPropGizmosVisible(view.propsGroup, $('#showHandles').checked);
   selectBone('chest');
   loadUserPoses();
   view.resize();

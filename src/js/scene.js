@@ -80,6 +80,9 @@ export function createScene(canvas) {
     const w = parent.clientWidth;
     const h = parent.clientHeight;
     if (w === 0 || h === 0) return;
+    // devicePixelRatio cambia con el zoom de la interfaz (Ctrl +/-): hay que
+    // reajustarlo o el lienzo se ve borroso o pixelado.
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(w, h, false);
     camera.aspect = w / h;
     camera.updateProjectionMatrix();

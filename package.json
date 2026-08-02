@@ -39,10 +39,12 @@
       "main.cjs",
       "preload.cjs",
       "src/**/*",
+      "build/icon.ico",
       "!src/**/*.map",
       "!node_modules/**/*"
     ],
     "win": {
+      "icon": "build/icon.ico",
       "target": [
         {
           "target": "nsis",
@@ -65,7 +67,10 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Manga Pose Studio"
+      "shortcutName": "Manga Pose Studio",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico"
     }
   },
   "allowScripts": {

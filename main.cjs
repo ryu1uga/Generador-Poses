@@ -44,6 +44,9 @@ function createWindow() {
     center: true,
     backgroundColor: '#14161c',
     title: 'Manga Pose Studio',
+    // En desarrollo Electron usaría su icono por defecto; en el paquete ya lo
+    // incrusta electron-builder desde build/icon.ico.
+    icon: path.join(__dirname, 'build', 'icon.ico'),
     show: false,
     autoHideMenuBar: true,
     webPreferences: {

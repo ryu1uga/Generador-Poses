@@ -17,20 +17,21 @@
     "start:soft": "electron . --dev --use-angle=swiftshader --ignore-gpu-blocklist",
     "test": "node --test \"test/**/*.test.mjs\"",
     "test:watch": "node --test --watch \"test/**/*.test.mjs\"",
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true});console.log('dist/ borrada')\"",
+    "redist": "npm run clean && npm run dist",
     "dist": "npm run vendor && electron-builder --win --x64",
-    "dist:portable": "npm run vendor && electron-builder --win portable --x64",
+    "dist:portable": "npm run vendor && electron-builder --win portable --x64 -c.nsis.oneClick=false",
     "pack": "npm run vendor && electron-builder --dir"
   },
-  "dependencies": {
-    "electron": "^32.3.3",
-    "three": "^0.169.0"
-  },
   "devDependencies": {
-    "electron-builder": "^25.1.8"
+    "electron": "^32.3.3",
+    "electron-builder": "^25.1.8",
+    "three": "^0.169.0"
   },
   "build": {
     "appId": "com.ryuichi.mangaposestudio",
     "productName": "Manga Pose Studio",
+    "copyright": "Copyright © 2026 Ryuichi",
     "directories": {
       "output": "dist",
       "buildResources": "build"
@@ -40,34 +41,45 @@
       "preload.cjs",
       "src/**/*",
       "build/icon.ico",
+      "LICENSE",
       "!src/**/*.map",
       "!node_modules/**/*"
     ],
     "win": {
       "icon": "build/icon.ico",
+      "signtoolOptions": {
+        "publisherName": "Ryuichi"
+      },
       "target": [
         {
           "target": "nsis",
           "arch": [
             "x64"
           ]
-        },
-        {
-          "target": "portable",
-          "arch": [
-            "x64"
-          ]
         }
       ],
-      "artifactName": "${productName}-${version}-${arch}.${ext}"
+      "artifactName": "${productName} Setup ${version}.${ext}"
     },
     "nsis": {
       "oneClick": false,
       "perMachine": false,
-      "allowToChangeInstallationDirectory": true,
+      "allowElevation": false,
+      "allowToChangeInstallationDirectory": false,
+      "runAfterFinish": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
+      "menuCategory": false,
       "shortcutName": "Manga Pose Studio",
+      "uninstallDisplayName": "Manga Pose Studio ${version}",
+      "license": "build/license.txt",
+      "include": "build/installer.nsh",
+      "multiLanguageInstaller": true,
+      "installerLanguages": [
+        "es_ES",
+        "en_US"
+      ],
+      "displayLanguageSelector": true,
+      "deleteAppDataOnUninstall": false,
       "installerIcon": "build/icon.ico",
       "uninstallerIcon": "build/icon.ico",
       "installerHeaderIcon": "build/icon.ico"
